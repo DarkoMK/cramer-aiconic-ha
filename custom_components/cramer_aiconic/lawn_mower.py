@@ -232,6 +232,7 @@ class CramerLawnMower(CramerEntity, LawnMowerEntity):
     async def async_clear_schedule(self, timer_index: int | None = None) -> None:
         """Clear one week timer, or all of them when no index is given."""
         index = protocol.TIMER_INDEX_ALL if timer_index is None else timer_index
+        self.coordinator.forget_timer_draft(self._device_id, timer_index)
         await self.coordinator.async_send(
             self._device_id,
             protocol.cmd_clear_week_timer(

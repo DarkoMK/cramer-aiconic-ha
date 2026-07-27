@@ -39,6 +39,7 @@ from .api import (
 from .const import (
     COMMAND_PACING,
     DOMAIN,
+    FAILURES_BEFORE_UNAVAILABLE,
     ENRICH_EVERY_CYCLES,
     MQTT_RESPONSE_TIMEOUT,
     POST_COMMAND_REFRESH_DELAY,
@@ -103,6 +104,10 @@ class MowerState:
     zones: list[dict[str, Any]] = field(default_factory=list)
     settings_updated: datetime | None = None
     settings_error: str | None = None
+    #: When the in-flight settings read began, so a read cannot discard an
+    #: edit made after it started. Per mower, because two mowers read
+    #: independently.
+    settings_read_started: float = 0.0
 
     @property
     def enabled_timers(self) -> list[dict[str, Any]]:
@@ -112,6 +117,10 @@ class MowerState:
     def active_zone(self) -> str | None:
         """The map the mower is currently set to work."""
         return self.map_name
+
+    def timer_is_defined(self, index: int) -> bool:
+        """Whether the mower itself holds a timer in this slot."""
+        return any(t.get("index") == index for t in self.week_timers)
 
     def timer(self, index: int) -> dict[str, Any] | None:
         """The week timer in a slot, including edits not yet read back."""
@@ -190,7 +199,6 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
         self._settings_last_run: float = 0.0
         self.options_snapshot: dict[str, Any] = {}
         self.consecutive_failures = 0
-        self._settings_read_started: float = 0.0
 
     # -- helpers ------------------------------------------------------------
     def _next_message_id(self) -> int:
@@ -202,7 +210,21 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
         return self._next_message_id()
 
     async def _async_load_devices(self) -> None:
-        devices = await self.api.async_get_devices()
+        """Refresh the account's device list.
+
+        The list changes almost never, so a throttled refresh must not take
+        the poll down with it — the cached list is still perfectly good. Only
+        a first load, where there is nothing cached, is fatal.
+        """
+        try:
+            devices = await self.api.async_get_devices()
+        except CramerAuthError:
+            raise
+        except CramerApiError as err:
+            if not self._devices:
+                raise
+            _LOGGER.debug("Device list refresh failed, keeping cached list: %s", err)
+            return
         mowers = [
             d for d in devices if d.product_type and d.product_type.upper().startswith("RLM")
         ]
@@ -225,10 +247,10 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
         except CramerAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except CramerRateLimitError as err:
-            self.consecutive_failures += 1
+            self._note_failure()
             raise UpdateFailed(f"Cramer cloud is throttling requests: {err}") from err
         except CramerApiError as err:
-            self.consecutive_failures += 1
+            self._note_failure()
             raise UpdateFailed(str(err)) from err
 
         # The settings pass is best-effort and must never fail the poll.
@@ -238,6 +260,19 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             )
 
         return self._states
+
+    def _note_failure(self) -> None:
+        """Count a failed poll and, at the tolerance limit, tell the entities.
+
+        Home Assistant only notifies listeners on the *first* failure — once
+        ``last_update_success`` is already False it stops. Without a nudge at
+        the crossing point the entities would never re-evaluate, so the
+        tolerance window would silently become "available forever with stale
+        data", which is worse than flapping.
+        """
+        self.consecutive_failures += 1
+        if self.consecutive_failures == FAILURES_BEFORE_UNAVAILABLE + 1:
+            self.hass.loop.call_soon(self.async_update_listeners)
 
     def _settings_due(self) -> bool:
         return time.monotonic() - self._settings_last_run >= SETTINGS_REFRESH_SECONDS
@@ -391,7 +426,7 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             self.async_update_listeners()
 
     async def _async_read_settings(self, device: CramerDevice, state: MowerState) -> None:
-        self._settings_read_started = time.monotonic()
+        state.settings_read_started = time.monotonic()
         mqtt_info = await self.api.async_get_mqtt_info()
         credentials = await self.api.async_get_aws_credentials(mqtt_info)
         reader = await self.hass.async_add_executor_job(
@@ -483,10 +518,12 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             state.week_timers = value["week_timers"]
             # Anything written before this read started is now confirmed (or
             # was rejected); either way the mower's answer wins.
+            # Confirmed by this read, so the mower's answer wins — except for
+            # drafts that were never sent, and edits made after the read began.
             state.pending_timers = {
                 index: entry
                 for index, entry in state.pending_timers.items()
-                if entry["at"] >= self._settings_read_started
+                if not entry["sent"] or entry["at"] >= state.settings_read_started
             }
         if value := decoded.get(protocol.DP_MAP_COVERAGE):
             state.area_cut = value["area_cut"]
@@ -559,6 +596,31 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
         }
         merged["start"] = f"{merged['hour']:02d}:{merged['minute']:02d}"
 
+        # Filling in a blank slot takes several edits — days, then a time, then
+        # a duration. Sending after the first one would leave a zero-length
+        # timer sitting on the mower, so hold the draft locally until the slot
+        # describes something the mower can actually run.
+        defined = state.timer_is_defined(index)
+        complete = bool(merged["days"]) and merged["duration_minutes"] > 0
+        send = defined or complete
+
+        state.pending_timers[index] = {
+            "values": merged,
+            "at": time.monotonic(),
+            "sent": send,
+        }
+        self.async_update_listeners()
+
+        if not send:
+            _LOGGER.debug(
+                "Timer %s is still incomplete (days=%s, duration=%s); holding the "
+                "draft until it can be written",
+                index + 1,
+                merged["days"],
+                merged["duration_minutes"],
+            )
+            return
+
         payload = protocol.cmd_set_week_timer(
             index,
             site,
@@ -570,9 +632,6 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             enabled=merged["enabled"],
             message_id=self._next_message_id(),
         )
-        # Record the edit before sending so a follow-up edit builds on it.
-        state.pending_timers[index] = {"values": merged, "at": time.monotonic()}
-        self.async_update_listeners()
         await self.async_send(
             device_id, payload, f"update timer {index + 1}", refresh_settings=True
         )
@@ -586,6 +645,16 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
                 "integration has completed a settings read"
             )
         return state.site_name, state.map_name
+
+    def forget_timer_draft(self, device_id: str, index: int | None) -> None:
+        """Drop local drafts after the mower has been told to clear a slot."""
+        state = self._states.get(device_id)
+        if state is None:
+            return
+        if index is None:
+            state.pending_timers.clear()
+        else:
+            state.pending_timers.pop(index, None)
 
     async def async_refresh_settings_now(self) -> None:
         """Force a settings read (used after changing one)."""
