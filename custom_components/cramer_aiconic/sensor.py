@@ -141,6 +141,27 @@ SENSORS: tuple[CramerSensorDescription, ...] = (
         value_fn=lambda m: m.firmware_version,
     ),
     CramerSensorDescription(
+        key="zones",
+        translation_key="zones",
+        value_fn=lambda m: len(m.zones) if m.zones else None,
+        attrs_fn=lambda m: {
+            "active_zone": m.active_zone,
+            "zones": [
+                {
+                    **zone,
+                    "active": zone["name"] == m.active_zone,
+                    # Coverage is reported for whichever map the mower is
+                    # working, so it only belongs to the active zone.
+                    "area_cut": m.area_cut if zone["name"] == m.active_zone else None,
+                    "area_remaining": (
+                        m.area_remaining if zone["name"] == m.active_zone else None
+                    ),
+                }
+                for zone in m.zones
+            ],
+        },
+    ),
+    CramerSensorDescription(
         key="schedule",
         translation_key="schedule",
         value_fn=lambda m: len(m.enabled_timers) if m.week_timers else None,

@@ -26,6 +26,7 @@ SERVICE_PARK = "park"
 SERVICE_START_ZONE = "start_mowing_options"
 SERVICE_SET_SCHEDULE = "set_schedule"
 SERVICE_CLEAR_SCHEDULE = "clear_schedule"
+SERVICE_DRIVE = "drive"
 
 DAY_OPTIONS = protocol.DAY_ORDER
 
@@ -98,6 +99,25 @@ async def async_setup_entry(
             )
         },
         "async_clear_schedule",
+    )
+    platform.async_register_entity_service(
+        SERVICE_DRIVE,
+        {
+            vol.Required("speed"): vol.All(
+                vol.Coerce(int),
+                vol.Range(
+                    min=-protocol.DRIVE_SPEED_LIMIT, max=protocol.DRIVE_SPEED_LIMIT
+                ),
+            ),
+            vol.Optional("angular_velocity", default=0): vol.All(
+                vol.Coerce(int),
+                vol.Range(
+                    min=-protocol.DRIVE_ANGULAR_LIMIT, max=protocol.DRIVE_ANGULAR_LIMIT
+                ),
+            ),
+            vol.Optional("set_waypoint", default=False): cv.boolean,
+        },
+        "async_drive",
     )
     platform.async_register_entity_service(
         SERVICE_START_ZONE,
@@ -219,6 +239,26 @@ class CramerLawnMower(CramerEntity, LawnMowerEntity):
             ),
             "clear the schedule",
             refresh_settings=True,
+        )
+
+    async def async_drive(
+        self, speed: int, angular_velocity: int = 0, set_waypoint: bool = False
+    ) -> None:
+        """Nudge the mower manually.
+
+        The mower only accepts this in mapping/manual mode and coasts to a stop
+        once commands stop arriving, so one call moves it a little rather than
+        sending it somewhere. Call it repeatedly to drive continuously.
+        """
+        await self.coordinator.async_send(
+            self._device_id,
+            protocol.cmd_drive_mower(
+                speed,
+                angular_velocity,
+                protocol.WAYPOINT_HERE if set_waypoint else protocol.WAYPOINT_NONE,
+                message_id=self.coordinator.build_message_id(),
+            ),
+            "drive",
         )
 
     async def async_start_with_options(

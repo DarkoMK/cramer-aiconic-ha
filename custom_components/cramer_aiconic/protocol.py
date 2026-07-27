@@ -71,6 +71,8 @@ P_SET_DEFAULT_SPEED = 752
 P_GET_DEFAULT_SPEED = 754
 P_SET_SELECTED_SITE = 756
 P_GET_SELECTED_SITE = 758
+P_DRIVE_MOWER = 510
+P_GET_MAPS = 498
 P_GET_MOWER_SW_PACKAGE = 590
 P_GET_MAP_COVERAGE = 640
 P_SET_WEEK_TIMER = 598
@@ -122,6 +124,8 @@ DP_AUTO_UPDATE = P_GET_AUTO_UPDATE + 1         # 793
 DP_WEEK_TIMERS = P_GET_ALL_WEEK_TIMERS + 1     # 603
 DP_SW_PACKAGE = P_GET_MOWER_SW_PACKAGE + 1     # 591
 DP_MAP_COVERAGE = P_GET_MAP_COVERAGE + 1       # 641
+DP_MAPS = P_GET_MAPS + 1                       # 499
+DP_DRIVE = P_DRIVE_MOWER + 1                   # 511
 
 #: Settings read over MQTT. The mower drops requests that arrive faster than
 #: roughly one every three seconds, so these are paced.
@@ -138,6 +142,7 @@ MQTT_SETTING_COMMANDS = [
     P_GET_ALL_WEEK_TIMERS,
     P_GET_MAP_COVERAGE,
     P_GET_MOWER_SW_PACKAGE,
+    P_GET_MAPS,
 ]
 
 
@@ -261,6 +266,32 @@ TIMER_MODE: dict[int, str] = {
 #: A cleared timer slot.
 TIMER_INDEX_ALL = 0xFF
 MAX_TIMER_INDEX = 99
+
+
+#: ``DriveMowerRequest`` waypoint handling.
+WAYPOINT_NONE = 0
+WAYPOINT_HERE = 1
+
+#: ``DriveMowerResponse.WaypointAvailability`` — why a drive was refused.
+WAYPOINT_AVAILABILITY: dict[int, str] = {
+    0xFF: "init",
+    0: "ok_good_signal",
+    1: "ok_weak_signal",
+    2: "cant_set_no_signal",
+    3: "cant_set_calibration_not_ready",
+    4: "not_in_map_mode",
+    5: "manual_control_not_available",
+    6: "self_intersections_not_allowed",
+}
+
+#: ``DriveMowerResponse.MOWER_ORIENTATION_UNKNOWN``.
+ORIENTATION_UNKNOWN = 0xFFFF
+
+#: Manual drive is a joystick in the app: it streams commands and the mower
+#: coasts to a stop when they stop arriving. These bounds keep a single
+#: service call from being violent.
+DRIVE_SPEED_LIMIT = 100
+DRIVE_ANGULAR_LIMIT = 100
 
 
 #: ``nextStartStop`` sentinel values meaning "no schedule known".
@@ -454,6 +485,36 @@ def cmd_clear_week_timer(timer_index: int, message_id: int = 1) -> str:
     if timer_index != TIMER_INDEX_ALL and not 0 <= timer_index <= MAX_TIMER_INDEX:
         raise ValueError(f"timer index must be 0-{MAX_TIMER_INDEX} or 0xFF for all")
     return build_hex(P_CLEAR_WEEK_TIMER, bytes([timer_index & 0xFF]), message_id)
+
+
+def cmd_drive_mower(
+    speed: int,
+    angular_velocity: int,
+    waypoint: int = WAYPOINT_NONE,
+    message_id: int = 1,
+) -> str:
+    """Drive the mower manually for one command step.
+
+    ``speed`` and ``angular_velocity`` are signed; negative reverses. The mower
+    only honours this in mapping/manual mode and stops once commands stop
+    arriving, so a single call is a nudge rather than a journey.
+    """
+    if abs(speed) > DRIVE_SPEED_LIMIT:
+        raise ValueError(f"speed must be within +/-{DRIVE_SPEED_LIMIT}")
+    if abs(angular_velocity) > DRIVE_ANGULAR_LIMIT:
+        raise ValueError(f"angular velocity must be within +/-{DRIVE_ANGULAR_LIMIT}")
+    body = (
+        struct.pack("<h", speed)
+        + struct.pack("<h", angular_velocity)
+        + (waypoint & 0xFFFF).to_bytes(2, "little")
+    )
+    return build_hex(P_DRIVE_MOWER, body, message_id)
+
+
+def cmd_get_maps(site_name: str, first_index: int = 0, message_id: int = 1) -> str:
+    """List the maps (zones) defined for a site."""
+    body = _padded_string(site_name, 21) + (first_index & 0xFFFF).to_bytes(2, "little")
+    return build_hex(P_GET_MAPS, body, message_id)
 
 
 def cmd_get_site_names(first_index: int = 0, message_id: int = 1) -> str:
@@ -730,6 +791,60 @@ def decode_sw_package(body: bytes) -> dict[str, Any]:
     }
 
 
+def decode_drive(body: bytes) -> dict[str, Any]:
+    """Decode ``DriveMowerResponse`` (datapoint 511)."""
+    if len(body) < 12:
+        raise ValueError(f"drive response too short: {len(body)}")
+    availability = body[1]
+    orientation = int.from_bytes(body[10:12], "little")
+    return {
+        "return_code": body[0],
+        "waypoint_availability": WAYPOINT_AVAILABILITY.get(
+            availability, f"unknown_{availability}"
+        ),
+        "relative_east": struct.unpack_from("<i", body, 2)[0],
+        "relative_north": struct.unpack_from("<i", body, 6)[0],
+        "orientation": None if orientation == ORIENTATION_UNKNOWN else orientation,
+    }
+
+
+def decode_maps(body: bytes) -> dict[str, Any]:
+    """Decode ``GetMapsResponse`` (datapoint 499).
+
+    A return code, a u16 continuation index, then 23-byte records of a
+    21-byte name and a u16 status mask. In that mask a set bit means *not*
+    ok, which is why the flags below are inverted.
+    """
+    if not body:
+        raise ValueError("maps response too short: 0")
+    if len(body) < 3:
+        return {"return_code": body[0], "next_index": 0, "maps": []}
+
+    maps: list[dict[str, Any]] = []
+    offset = 3
+    while offset + 23 <= len(body):
+        name = _nul_string(body[offset : offset + 21])
+        code = int.from_bytes(body[offset + 21 : offset + 23], "little")
+        if name:
+            maps.append(
+                {
+                    "name": name,
+                    "confirmed": not code & 1,
+                    "charging_station_ok": not code & 2,
+                    "working_areas_reachable": not code & 4,
+                    "verification_ongoing": bool(code & 8),
+                    "working_area_ok": not code & 16,
+                    "status_code": code,
+                }
+            )
+        offset += 23
+    return {
+        "return_code": body[0],
+        "next_index": int.from_bytes(body[1:3], "little"),
+        "maps": maps,
+    }
+
+
 def decode_auto_update(body: bytes) -> dict[str, Any]:
     """Decode ``AutoUpdateResponse`` (datapoint 793)."""
     if len(body) < 2:
@@ -782,6 +897,8 @@ MQTT_DECODERS = {
     DP_WEEK_TIMERS: decode_week_timers,
     DP_MAP_COVERAGE: decode_map_coverage,
     DP_SW_PACKAGE: decode_sw_package,
+    DP_MAPS: decode_maps,
+    DP_DRIVE: decode_drive,
     DP_GNSS: decode_gnss,
     DP_MOWER_STATUS: decode_mower_status,
     DP_STATUS_PUSH: decode_status_push,

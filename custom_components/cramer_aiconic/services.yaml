@@ -89,3 +89,31 @@ clear_schedule:
           min: 0
           max: 99
           mode: box
+
+drive:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: cramer_aiconic
+  fields:
+    speed:
+      required: true
+      example: 20
+      selector:
+        number:
+          min: -100
+          max: 100
+          mode: slider
+    angular_velocity:
+      required: false
+      default: 0
+      selector:
+        number:
+          min: -100
+          max: 100
+          mode: slider
+    set_waypoint:
+      required: false
+      default: false
+      selector:
+        boolean:

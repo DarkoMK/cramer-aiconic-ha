@@ -117,6 +117,9 @@
       },
       "firmware_version": {
         "name": "Firmware"
+      },
+      "zones": {
+        "name": "Zones"
       }
     },
     "binary_sensor": {
@@ -276,6 +279,24 @@
         "timer_index": {
           "name": "Timer slot",
           "description": "Slot to clear. Leave empty to clear them all."
+        }
+      }
+    },
+    "drive": {
+      "name": "Drive",
+      "description": "Drive the mower manually for one step. Only works in mapping/manual mode; the mower stops when commands stop arriving.",
+      "fields": {
+        "speed": {
+          "name": "Speed",
+          "description": "Forward speed; negative reverses."
+        },
+        "angular_velocity": {
+          "name": "Turn",
+          "description": "Turn rate; negative turns the other way."
+        },
+        "set_waypoint": {
+          "name": "Set waypoint",
+          "description": "Drop a mapping waypoint at the current position."
         }
       }
     }

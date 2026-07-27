@@ -41,10 +41,39 @@ The mower's week timers are fully editable. Four slots, each with:
 Plus a `sensor` whose attributes hold the whole schedule, and
 `cramer_aiconic.set_schedule` / `cramer_aiconic.clear_schedule` services.
 
+### Zones and coverage
+
+`sensor.zones` lists the maps defined for your site, each with its health
+flags (confirmed, charging station reachable, working area OK, verification in
+progress) and a marker for the one currently selected. The mower reports
+coverage for whichever map it is working, so `area cut` and `area remaining`
+are attributed to the active zone.
+
+### Manual drive
+
+`cramer_aiconic.drive` nudges the mower by hand:
+
+```yaml
+- action: cramer_aiconic.drive
+  target:
+    entity_id: lawn_mower.lawnmower
+  data:
+    speed: 20            # negative reverses
+    angular_velocity: -10
+    set_waypoint: false  # drop a mapping waypoint here
+```
+
+> The mower only accepts this in mapping/manual mode, and it coasts to a stop
+> once commands stop arriving — the app streams them from a joystick. A single
+> call is a nudge, not a journey. If the mower refuses, the reason surfaces as
+> a waypoint-availability code (`not_in_map_mode`,
+> `manual_control_not_available`, `cant_set_no_signal`, …).
+
 ### State
 
 `state`, `battery`, `next start or stop`, `next start reason`, `area cut`,
-`area remaining`, `estimated time remaining`, `site`, `map`, `operation mode`,
+`area remaining`, `estimated time remaining`, `site`, `map`, `zones`,
+`operation mode`,
 `cutting height`, `default speed`, `schedule`, `signal quality`, `LTE signal`,
 `firmware`, `last status update`, and a `device_tracker` with the mower's GPS
 position.

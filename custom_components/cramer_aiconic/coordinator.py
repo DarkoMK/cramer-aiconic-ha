@@ -100,12 +100,18 @@ class MowerState:
     area_remaining: int | None = None
     estimated_remaining_minutes: int | None = None
     firmware_version: str | None = None
+    zones: list[dict[str, Any]] = field(default_factory=list)
     settings_updated: datetime | None = None
     settings_error: str | None = None
 
     @property
     def enabled_timers(self) -> list[dict[str, Any]]:
         return [t for t in self.week_timers if t.get("enabled")]
+
+    @property
+    def active_zone(self) -> str | None:
+        """The map the mower is currently set to work."""
+        return self.map_name
 
     def timer(self, index: int) -> dict[str, Any] | None:
         """The week timer in a slot, including edits not yet read back."""
@@ -439,6 +445,10 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             return protocol.cmd_get_week_timers(
                 state.site_name, state.map_name, message_id
             )
+        if parameter_id == protocol.P_GET_MAPS:
+            if not state.site_name:
+                return None
+            return protocol.cmd_get_maps(state.site_name, 0, message_id)
         return protocol.cmd_get(parameter_id, message_id)
 
     def _apply_settings(self, state: MowerState, frames: dict[int, bytes]) -> None:
@@ -484,6 +494,8 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             state.estimated_remaining_minutes = value["estimated_remaining_minutes"]
         if value := decoded.get(protocol.DP_SW_PACKAGE):
             state.firmware_version = value["firmware_version"]
+        if value := decoded.get(protocol.DP_MAPS):
+            state.zones = value["maps"]
         if value := decoded.get(protocol.DP_WIRELESS):
             state.lte_signal = value["lte_signal"]
             state.sim_card_status = value["sim_card_status"]
