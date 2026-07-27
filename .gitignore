@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+._*
+
+# Never commit anything captured from a live account or device
+*.apk
+decompiled*/
+apk*/
+probe/
+captured_*.json*
+*token*.json
+secrets.yaml

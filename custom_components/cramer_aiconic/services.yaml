@@ -1,0 +1,91 @@
+park:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: cramer_aiconic
+  fields:
+    minutes:
+      required: false
+      example: 120
+      selector:
+        number:
+          min: 0
+          max: 65534
+          unit_of_measurement: min
+          mode: box
+
+start_mowing_options:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: cramer_aiconic
+  fields:
+    override_schedule:
+      required: false
+      default: true
+      selector:
+        boolean:
+    map_index:
+      required: false
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+
+set_schedule:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: cramer_aiconic
+  fields:
+    timer_index:
+      required: true
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 99
+          mode: box
+    days:
+      required: true
+      example: "[mon, wed, fri]"
+      selector:
+        select:
+          multiple: true
+          options: [mon, tue, wed, thu, fri, sat, sun]
+    start_time:
+      required: true
+      example: "09:00:00"
+      selector:
+        time:
+    duration_minutes:
+      required: true
+      default: 240
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: min
+          mode: box
+    enabled:
+      required: false
+      default: true
+      selector:
+        boolean:
+
+clear_schedule:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: cramer_aiconic
+  fields:
+    timer_index:
+      required: false
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 99
+          mode: box

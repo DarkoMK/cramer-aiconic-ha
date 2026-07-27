@@ -1,0 +1,15 @@
+{
+  "domain": "cramer_aiconic",
+  "name": "Cramer AiConic",
+  "version": "1.0.0",
+  "documentation": "https://github.com/DarkoMK/cramer-aiconic-ha",
+  "issue_tracker": "https://github.com/DarkoMK/cramer-aiconic-ha/issues",
+  "codeowners": [
+    "@DarkoMK"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "requirements": [],
+  "integration_type": "hub",
+  "iot_class": "cloud_polling"
+}

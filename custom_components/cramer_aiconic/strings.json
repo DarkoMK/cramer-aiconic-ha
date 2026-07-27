@@ -1,0 +1,283 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Cramer AiConic",
+        "description": "Sign in with the same account you use in the Cramer AiConic app.",
+        "data": {
+          "username": "Email",
+          "password": "Password",
+          "region_code": "Region"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Cramer AiConic",
+        "description": "The password for {username} is no longer accepted. Enter it again.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Could not reach the Cramer cloud.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This Cramer account is already set up.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Cramer AiConic options",
+        "data": {
+          "scan_interval": "Polling interval",
+          "enable_settings": "Read mower settings"
+        },
+        "data_description": {
+          "scan_interval": "The mower pushes a status update roughly every 30 seconds, so polling faster than that gains little.",
+          "enable_settings": "Reads the light, sound, obstacle and site settings the cloud does not cache. This briefly opens the same connection the phone app uses, so the app may reconnect while it happens. Turn off if that is a nuisance."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "mower_state": {
+        "name": "State",
+        "state": {
+          "disconnected": "Disconnected",
+          "power_up": "Starting up",
+          "idle": "Idle",
+          "parked": "Parked",
+          "paused": "Paused",
+          "cutting": "Mowing",
+          "leaving": "Leaving charging station",
+          "searching": "Returning to charging station",
+          "charging": "Charging",
+          "error": "Error",
+          "fatal_error": "Fatal error",
+          "recovery": "Recovering",
+          "alarm": "Alarm",
+          "secondary_area": "Mowing secondary area",
+          "spot_cutting": "Spot cutting",
+          "transportation": "Transport mode",
+          "mapping": "Mapping",
+          "verification": "Verifying map",
+          "waiting": "Waiting",
+          "power_down": "Shutting down"
+        }
+      },
+      "next_start_stop": {
+        "name": "Next start or stop"
+      },
+      "next_start_stop_source": {
+        "name": "Next start reason"
+      },
+      "signal_quality": {
+        "name": "Signal quality"
+      },
+      "cutting_height": {
+        "name": "Cutting height"
+      },
+      "operation_mode": {
+        "name": "Operation mode"
+      },
+      "site_name": {
+        "name": "Site"
+      },
+      "map_name": {
+        "name": "Map"
+      },
+      "last_status_push": {
+        "name": "Last status update"
+      },
+      "default_speed": {
+        "name": "Default speed"
+      },
+      "lte_signal": {
+        "name": "LTE signal"
+      },
+      "settings_updated": {
+        "name": "Settings last read"
+      },
+      "schedule": {
+        "name": "Schedule"
+      },
+      "area_cut": {
+        "name": "Area cut"
+      },
+      "area_remaining": {
+        "name": "Area remaining"
+      },
+      "estimated_remaining": {
+        "name": "Estimated time remaining"
+      },
+      "firmware_version": {
+        "name": "Firmware"
+      }
+    },
+    "binary_sensor": {
+      "charging": {
+        "name": "Charging"
+      },
+      "in_charging_station": {
+        "name": "In charging station"
+      },
+      "rtk_fix": {
+        "name": "RTK fix"
+      },
+      "upside_down": {
+        "name": "Upside down"
+      }
+    },
+    "button": {
+      "start": {
+        "name": "Start mowing"
+      },
+      "pause": {
+        "name": "Pause"
+      },
+      "return_to_base": {
+        "name": "Return to base"
+      },
+      "refresh": {
+        "name": "Refresh status"
+      }
+    },
+    "number": {
+      "cutting_height": {
+        "name": "Cutting height"
+      },
+      "timer_duration": {
+        "name": "Timer {slot} duration"
+      }
+    },
+    "device_tracker": {
+      "mower_position": {
+        "name": "Position"
+      }
+    },
+    "select": {
+      "front_light": {
+        "name": "Front light",
+        "state": {
+          "off": "Off",
+          "on": "On",
+          "default": "Mower default"
+        }
+      },
+      "rear_light": {
+        "name": "Rear light",
+        "state": {
+          "off": "Off",
+          "on": "On",
+          "default": "Mower default"
+        }
+      },
+      "sound": {
+        "name": "Sound",
+        "state": {
+          "off": "Off",
+          "on": "On",
+          "default": "Mower default"
+        }
+      },
+      "obstacle_handling": {
+        "name": "Obstacle handling",
+        "state": {
+          "disabled": "Disabled",
+          "slow_down": "Slow down",
+          "stop_for_objects": "Stop for objects",
+          "avoid_objects": "Avoid objects",
+          "default": "Mower default"
+        }
+      },
+      "selected_site": {
+        "name": "Site"
+      }
+    },
+    "switch": {
+      "auto_update": {
+        "name": "Automatic firmware updates"
+      },
+      "timer_enabled": {
+        "name": "Timer {slot} enabled"
+      }
+    },
+    "time": {
+      "timer_start": {
+        "name": "Timer {slot} start"
+      }
+    },
+    "text": {
+      "timer_days": {
+        "name": "Timer {slot} days"
+      }
+    }
+  },
+  "services": {
+    "park": {
+      "name": "Park",
+      "description": "Send the mower to the charging station and keep it there.",
+      "fields": {
+        "minutes": {
+          "name": "Minutes",
+          "description": "How long to stay parked. Leave empty to park until the next scheduled start."
+        }
+      }
+    },
+    "start_mowing_options": {
+      "name": "Start mowing with options",
+      "description": "Start mowing with explicit schedule and map options.",
+      "fields": {
+        "override_schedule": {
+          "name": "Override schedule",
+          "description": "Mow the whole map now instead of following the week timer."
+        },
+        "map_index": {
+          "name": "Map index",
+          "description": "Which stored map to mow. Leave empty to reuse the last one."
+        }
+      }
+    },
+    "set_schedule": {
+      "name": "Set schedule",
+      "description": "Write one of the mower's week timers.",
+      "fields": {
+        "timer_index": {
+          "name": "Timer slot",
+          "description": "Which of the mower's timer slots to write (0-99)."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Days the timer runs on."
+        },
+        "start_time": {
+          "name": "Start time",
+          "description": "When the mowing window opens."
+        },
+        "duration_minutes": {
+          "name": "Duration",
+          "description": "How long the window stays open, in minutes."
+        },
+        "enabled": {
+          "name": "Enabled",
+          "description": "Turn the timer slot on or off."
+        }
+      }
+    },
+    "clear_schedule": {
+      "name": "Clear schedule",
+      "description": "Clear one week timer, or every timer when no slot is given.",
+      "fields": {
+        "timer_index": {
+          "name": "Timer slot",
+          "description": "Slot to clear. Leave empty to clear them all."
+        }
+      }
+    }
+  }
+}
