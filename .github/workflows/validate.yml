@@ -17,6 +17,11 @@ jobs:
 
   hacs:
     name: HACS
+    # HACS validation reads hacs.json and the manifest as raw file content,
+    # which it cannot do while the repository is private — those two checks
+    # fail with "Got None" no matter what the files contain. The job starts
+    # working by itself once the repository is made public.
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
