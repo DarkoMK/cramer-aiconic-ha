@@ -185,9 +185,12 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 @pytest.fixture(autouse=True)
 def no_post_command_delay():
-    """The post-command settle delay exists to give the cloud time; skip it."""
-    with patch(
-        "custom_components.cramer_aiconic.coordinator.POST_COMMAND_REFRESH_DELAY", 0
+    """The settle and pacing delays exist to give the cloud time; skip them."""
+    with (
+        patch(
+            "custom_components.cramer_aiconic.coordinator.POST_COMMAND_REFRESH_DELAY", 0
+        ),
+        patch("custom_components.cramer_aiconic.coordinator.COMMAND_PACING", 0),
     ):
         yield
 
@@ -363,6 +366,50 @@ class TestCommands:
         )
         assert parameter_id == protocol.P_SET_CUTTING_HEIGHT
         assert body == bytes([45])
+
+    async def test_cutting_height_shows_the_default_it_writes(
+        self, hass: HomeAssistant, setup_integration
+    ):
+        """The control writes the *default* height, so it must read that back.
+
+        Parameter 468 is ``SetDefaultCuttingHeight``; datapoint 471 carries the
+        default in byte 1 and the blade's current position in byte 2. Reading
+        byte 2 back made the slider ignore what was just written — the fixture
+        has a default of 40 and a current height of 96.
+        """
+        assert hass.states.get("number.lawnmower_cutting_height").state == "40"
+
+    async def test_cutting_height_is_read_back_from_the_mower_after_a_write(
+        self, hass: HomeAssistant, setup_integration, fake_api
+    ):
+        """A write alone never refreshes the cloud's cached copy.
+
+        The cloud re-caches datapoint 471 only when the mower answers a read of
+        parameter 470, so without an explicit read-back the next poll serves the
+        pre-write value and the new height looks like it was rejected.
+        """
+        before = len(fake_api.commands)
+
+        await hass.services.async_call(
+            "number",
+            "set_value",
+            {"entity_id": "number.lawnmower_cutting_height", "value": 45},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+        sent = [
+            protocol.parse_frame(bytes.fromhex(payload))[1]
+            for payload in fake_api.commands[before:]
+        ]
+        assert protocol.P_SET_CUTTING_HEIGHT in sent
+        assert protocol.P_GET_CUTTING_HEIGHT in sent, (
+            "the mower was never asked to re-report the height, so the poll "
+            "that follows reads a stale cached datapoint"
+        )
+        assert sent.index(protocol.P_GET_CUTTING_HEIGHT) > sent.index(
+            protocol.P_SET_CUTTING_HEIGHT
+        ), "the read-back must follow the write"
 
 
 class TestScheduleDrafts:

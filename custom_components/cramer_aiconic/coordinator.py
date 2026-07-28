@@ -663,9 +663,21 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
 
     # -- commands -----------------------------------------------------------
     async def async_send(
-        self, device_id: str, payload_hex: str, action: str, *, refresh_settings: bool = False
+        self,
+        device_id: str,
+        payload_hex: str,
+        action: str,
+        *,
+        refresh_settings: bool = False,
+        read_back: int | None = None,
     ) -> None:
-        """Send a command frame to a mower and schedule a state refresh."""
+        """Send a command frame to a mower and schedule a state refresh.
+
+        ``read_back`` is the parameter id of the matching read command. The
+        cloud re-caches a datapoint only when the mower answers a read, so a
+        write on its own leaves the cached copy at its pre-write value; without
+        the read-back the refresh below would restate the old setting.
+        """
         state = self._states.get(device_id)
         if state is None:
             raise HomeAssistantError(f"Unknown mower {device_id}")
@@ -684,12 +696,40 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
 
         self.config_entry.async_create_background_task(
             self.hass,
-            self._async_delayed_refresh(refresh_settings),
+            self._async_delayed_refresh(
+                refresh_settings, read_back=read_back, device_id=device_id
+            ),
             f"{DOMAIN}_refresh_after_{action}",
         )
 
-    async def _async_delayed_refresh(self, settings: bool = False) -> None:
+    async def _async_delayed_refresh(
+        self,
+        settings: bool = False,
+        *,
+        read_back: int | None = None,
+        device_id: str | None = None,
+    ) -> None:
+        if read_back is not None and device_id is not None:
+            # The mower drops requests that arrive on the heels of another, so
+            # let the write land before asking for the value back.
+            await asyncio.sleep(COMMAND_PACING)
+            await self._async_read_back(device_id, read_back)
         await asyncio.sleep(POST_COMMAND_REFRESH_DELAY)
         if settings and self.settings_enabled:
             await self.async_refresh_settings_now()
         await self.async_request_refresh()
+
+    async def _async_read_back(self, device_id: str, parameter_id: int) -> None:
+        """Ask the mower to re-report one datapoint, so the cloud re-caches it."""
+        state = self._states.get(device_id)
+        if state is None:
+            return
+        try:
+            await self.api.async_send_command(
+                state.device.product_id,
+                device_id,
+                protocol.cmd_get(parameter_id, self._next_message_id()),
+            )
+        except CramerApiError as err:
+            # Best effort: the next enrichment cycle will refresh it anyway.
+            _LOGGER.debug("Read-back of parameter %s failed: %s", parameter_id, err)

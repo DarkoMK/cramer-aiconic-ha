@@ -62,7 +62,15 @@ class CramerCuttingHeight(CramerEntity, NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        return self.mower.cutting_height
+        """The default height — the one this control actually writes.
+
+        Parameter 468 is ``SetDefaultCuttingHeight``, and datapoint 471 reports
+        the default (byte 1) and the blade's current position (byte 2)
+        separately. Reading byte 2 back meant the slider never showed the value
+        it had just written: a mower set to a 35 mm default reports a current
+        height of 36 mm while the blade is still travelling.
+        """
+        return self.mower.default_cutting_height
 
     async def async_set_native_value(self, value: float) -> None:
         await self.coordinator.async_send(
@@ -71,6 +79,7 @@ class CramerCuttingHeight(CramerEntity, NumberEntity):
                 int(value), message_id=self.coordinator.build_message_id()
             ),
             "set cutting height",
+            read_back=protocol.P_GET_CUTTING_HEIGHT,
         )
 
 

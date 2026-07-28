@@ -23,7 +23,7 @@ A single device with everything the app exposes, plus a few things it does not.
 |---|---|
 | `lawn_mower` | Start mowing, pause, dock — with the standard mower card |
 | `button` | Start / Pause / Return to base / Refresh status |
-| `number` — cutting height | 20–102 mm |
+| `number` — cutting height | The mower's default height, 20–80 mm |
 | `select` | Front light, rear light, sound, obstacle handling, site |
 | `switch` | Automatic firmware updates |
 
@@ -74,7 +74,8 @@ are attributed to the active zone.
 `state`, `battery`, `next start or stop`, `next start reason`, `area cut`,
 `area remaining`, `estimated time remaining`, `site`, `map`, `zones`,
 `operation mode`,
-`cutting height`, `default speed`, `schedule`, `signal quality`, `LTE signal`,
+`cutting height` (the blade's current position), `default speed`, `schedule`,
+`signal quality`, `LTE signal`,
 `firmware`, `last status update`, and a `device_tracker` with the mower's GPS
 position.
 
