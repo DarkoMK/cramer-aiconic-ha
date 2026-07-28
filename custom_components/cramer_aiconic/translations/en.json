@@ -206,6 +206,9 @@
       "auto_update": {
         "name": "Automatic firmware updates"
       },
+      "settings_sync": {
+        "name": "Settings sync"
+      },
       "timer_enabled": {
         "name": "Timer {slot} enabled"
       }

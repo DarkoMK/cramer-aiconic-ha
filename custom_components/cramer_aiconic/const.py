@@ -87,6 +87,13 @@ COMMAND_PACING: Final = 3.5
 # How often to run the MQTT settings pass, and how long to wait for the mower
 # to answer once the requests are out.
 SETTINGS_REFRESH_SECONDS: Final = 900
+
+# How long the settings-sync switch stays off before releasing itself. The
+# switch exists so the phone app can hold the single IoT connection slot while
+# you map a zone, and that is a job measured in minutes — leaving it off for
+# weeks would quietly freeze every settings entity with no sign of why, so it
+# expires rather than trusting anyone to remember.
+SETTINGS_SYNC_PAUSE_SECONDS: Final = 3600
 MQTT_RESPONSE_TIMEOUT: Final = 25.0
 
 # Consecutive failed polls tolerated before entities report unavailable.
