@@ -12,9 +12,17 @@ from .coordinator import CramerConfigEntry, CramerCoordinator
 from .entity import CramerEntity
 from .schedule_entity import CramerTimerEntity, slot_range
 
-# CuttingHeight.fromUInt8 accepts 20..102 mm.
+# The wire format is wider than the machine: `CuttingHeight.fromUInt8` accepts
+# 20..102 mm, but the Cramer app's own cutting-height slider only ever offers
+# 20..80 (`EditCuttingHeightView`: `rangeTo(20.0f, 80.0f)`, default 80). Exposing
+# the wire range let a dashboard offer heights the mower cannot actually cut, so
+# these bound what the vendor bounds.
 MIN_HEIGHT_MM = 20
-MAX_HEIGHT_MM = 102
+MAX_HEIGHT_MM = 80
+
+# What the protocol will still carry, for callers that need to recognise a
+# reading the mower reports from outside the settable range rather than reject it.
+WIRE_MAX_HEIGHT_MM = 102
 
 
 async def async_setup_entry(
