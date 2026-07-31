@@ -44,6 +44,7 @@ from .const import (
     MQTT_RESPONSE_TIMEOUT,
     POST_COMMAND_REFRESH_DELAY,
     SETTINGS_REFRESH_SECONDS,
+    STALE_AFTER_SECONDS,
 )
 from .mqtt_link import CramerMqttError, build_reader
 
@@ -74,6 +75,11 @@ class MowerState:
     site_name: str | None = None
     map_name: str | None = None
     last_status_push: datetime | None = None
+    #: The newest timestamp the cloud has put on any of this mower's data —
+    #: the mower's own last sign of life, not the last time the poll ran.
+    #: Taken from the cloud rather than from Home Assistant's clock so that a
+    #: restart, which resets every ``last_changed``, cannot restart the count.
+    last_contact: datetime | None = None
     # -- position
     latitude: float | None = None
     longitude: float | None = None
@@ -141,6 +147,28 @@ class MowerState:
     @property
     def is_online(self) -> bool:
         return self.device.is_online
+
+    @property
+    def contact_age(self) -> timedelta | None:
+        """How long since the mower last reported anything."""
+        if self.last_contact is None:
+            return None
+        return dt_util.utcnow() - self.last_contact
+
+    @property
+    def is_stale(self) -> bool:
+        """Whether the readings describe the past rather than the present.
+
+        Two independent signals, because either can be wrong on its own. The
+        cloud's own online flag is the prompt one — it dropped four minutes
+        after the real mower died — but it is the cloud's opinion, and a cloud
+        that has stopped updating can keep claiming a dead mower is online.
+        The age of the data catches that case.
+        """
+        if not self.is_online:
+            return True
+        age = self.contact_age
+        return age is not None and age.total_seconds() > STALE_AFTER_SECONDS
 
     @property
     def in_charging_station(self) -> bool:
@@ -317,6 +345,8 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
         source for state and battery. Datapoint 81 carries richer detail but
         only refreshes when asked, so it must not overwrite the push.
         """
+        self._advance_contact(state, decoded)
+
         push = decoded.get(protocol.DP_STATUS_PUSH)
         status = decoded.get(protocol.DP_MOWER_STATUS)
 
@@ -349,6 +379,28 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             state.map_name = mode["map_name"] or None
 
         self._apply_gnss(state, decoded.get(protocol.DP_GNSS))
+
+    @staticmethod
+    def _advance_contact(state: MowerState, decoded: dict[int, dict[str, Any]]) -> None:
+        """Move the last-contact mark up to the newest timestamp on offer.
+
+        Forwards only. The settings pass feeds its frames through the same
+        merge with no timestamps of their own, and the cloud can answer a poll
+        with an older cached datapoint than one already seen; neither may drag
+        the mark backwards and invent a gap that never happened.
+        """
+        newest = max(
+            (
+                parsed
+                for values in decoded.values()
+                if (parsed := _parse_timestamp(values.get("_timestamp"))) is not None
+            ),
+            default=None,
+        )
+        if newest is not None and (
+            state.last_contact is None or newest > state.last_contact
+        ):
+            state.last_contact = newest
 
     @staticmethod
     def _apply_gnss(state: MowerState, gnss: dict[str, Any] | None) -> None:
@@ -412,6 +464,18 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
                 state = self._states.get(device.device_id)
                 if state is None:
                     continue
+                if state.is_stale:
+                    # A mower that is not reporting cannot answer either, and
+                    # the attempt costs an AWS session and a 25 s wait before
+                    # failing. The real one logged this every 15.5 minutes for
+                    # six hours while it sat on the lawn with a flat battery.
+                    state.settings_error = "the mower is not reporting"
+                    _LOGGER.debug(
+                        "Skipping the settings pass for %s: no contact since %s",
+                        device.name,
+                        state.last_contact,
+                    )
+                    continue
                 try:
                     await self._async_read_settings(device, state)
                     self._publish_firmware(state)
@@ -466,6 +530,9 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
 
         self._apply_settings(state, frames)
         state.settings_updated = dt_util.utcnow()
+        # The mower answered over MQTT just now. The frames carry no timestamp
+        # of their own, but the reply itself is proof of life.
+        state.last_contact = state.settings_updated
 
     def _settings_payload(self, parameter_id: int, state: MowerState) -> str | None:
         """Build the read command, or None if it cannot be asked for yet.

@@ -34,7 +34,21 @@ async def async_get_config_entry_diagnostics(
         "entry": async_redact_data(dict(entry.data), TO_REDACT),
         "options": dict(entry.options),
         "mowers": {
-            device_id: async_redact_data(asdict(state), TO_REDACT)
+            # ``is_stale`` and the contact age are properties, so ``asdict``
+            # does not see them — and they are the first thing worth knowing
+            # when the readings look wrong.
+            device_id: async_redact_data(
+                asdict(state)
+                | {
+                    "is_stale": state.is_stale,
+                    "contact_age_seconds": (
+                        None
+                        if state.contact_age is None
+                        else state.contact_age.total_seconds()
+                    ),
+                },
+                TO_REDACT,
+            )
             for device_id, state in (coordinator.data or {}).items()
         },
     }

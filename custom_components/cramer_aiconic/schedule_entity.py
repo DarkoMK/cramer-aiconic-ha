@@ -39,7 +39,7 @@ class CramerTimerEntity(CramerEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         timer = self.timer
-        return {
+        return super().extra_state_attributes | {
             "slot": self._index,
             "configured": timer is not None,
             "days": timer.get("days") if timer else [],

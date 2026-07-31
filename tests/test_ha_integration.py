@@ -6,7 +6,8 @@ the behaviour being asserted is the behaviour that ships — not a
 reimplementation of it in a fake.
 """
 
-from datetime import time as dt_time
+from dataclasses import replace
+from datetime import time as dt_time, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -86,6 +87,12 @@ class FakeApi:
         self.device_list_error: Exception | None = None
         self.devices = [DEVICE]
         self.on_tokens_updated = None
+        self.mqtt_info_calls = 0
+        #: Timestamp the cloud stamps on its cached datapoints. None means
+        #: "the mower reported just now", which is what a healthy mower does
+        #: every ~30 s. Tests pin an older value to simulate one that has
+        #: stopped reporting.
+        self.timestamp: str | None = None
 
     async def async_get_devices(self):
         self.device_list_calls += 1
@@ -93,8 +100,20 @@ class FakeApi:
             raise self.device_list_error
         return self.devices
 
+    def go_offline(self):
+        """What the cloud does once the mower stops checking in."""
+        self.devices = [replace(DEVICE, is_online=False)]
+
+    def go_online(self):
+        self.devices = [DEVICE]
+
     async def async_get_datapoints(self, product_id, device_id, indices):
-        return {i: v for i, v in datapoints().items() if i in indices}
+        stamp = self.timestamp or dt_util.utcnow().isoformat()
+        return {
+            index: (data, stamp)
+            for index, (data, _) in datapoints().items()
+            if index in indices
+        }
 
     async def async_send_command(self, product_id, device_id, payload_hex):
         self.commands.append(payload_hex)
@@ -104,6 +123,7 @@ class FakeApi:
         return {"latitude": "52.3731", "longitude": "4.8922"}
 
     async def async_get_mqtt_info(self):
+        self.mqtt_info_calls += 1
         raise CramerApiError("no mqtt in tests")
 
     async def async_get_aws_credentials(self, mqtt_info):
@@ -608,3 +628,143 @@ class TestTokenPersistence:
             )
             await hass.async_block_till_done()
         assert setup_integration.runtime_data is not first
+
+
+class TestOfflineAndStaleness:
+    """A mower that stops reporting must look different from a healthy one.
+
+    The cloud serves the last datapoints it ever received, indefinitely and
+    without complaint. On 2026-07-31 the real mower flattened its battery
+    away from the dock at 07:24; six hours later every entity still read as
+    though it were live, the lawn mower entity still said "returning", and
+    the only clue was a warning buried in the log every 15 minutes.
+    """
+
+    @pytest.fixture(autouse=True)
+    def refresh_device_list_every_cycle(self):
+        """The online flag rides on the device list, refreshed every 10th poll."""
+        with patch(
+            "custom_components.cramer_aiconic.coordinator.ENRICH_EVERY_CYCLES", 1
+        ):
+            yield
+
+    async def test_contact_age_counts_from_the_cloud_timestamp(
+        self, hass: HomeAssistant, setup_integration, fake_api, freezer
+    ):
+        """Age comes from the mower's own timestamp, not from HA's clock.
+
+        A restart resets every ``last_changed`` in HA, so an age derived from
+        one silently restarts its count too. This one survives a restart.
+
+        The cloud keeps answering with the same cached timestamp — that is
+        precisely what it did for six hours after the mower died — so the age
+        has to come from the clock moving on, not the data changing.
+        """
+        fake_api.timestamp = dt_util.utcnow().isoformat()
+        freezer.tick(timedelta(minutes=42))
+        await setup_integration.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get("sensor.lawnmower_last_contact_age").state == "42"
+
+    async def test_fresh_while_the_mower_is_reporting(
+        self, hass: HomeAssistant, setup_integration
+    ):
+        assert hass.states.get("sensor.lawnmower_last_contact_age").state == "0"
+        assert hass.states.get("lawn_mower.lawnmower").state == "docked"
+        assert (
+            hass.states.get("sensor.lawnmower_battery").attributes["stale"] is False
+        )
+
+    async def test_readings_survive_the_mower_going_offline(
+        self, hass: HomeAssistant, setup_integration, fake_api
+    ):
+        """The last known values stay visible — they are still the best guess."""
+        fake_api.go_offline()
+        await setup_integration.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get("sensor.lawnmower_battery").state == "100"
+
+    async def test_readings_are_flagged_stale_when_the_mower_goes_offline(
+        self, hass: HomeAssistant, setup_integration, fake_api
+    ):
+        fake_api.go_offline()
+        await setup_integration.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get("sensor.lawnmower_battery").attributes["stale"] is True
+
+    async def test_the_mower_entity_goes_unavailable_when_the_mower_goes_offline(
+        self, hass: HomeAssistant, setup_integration, fake_api
+    ):
+        """The one entity that claims to say what the mower is doing.
+
+        Leaving it on its last activity is what made a dead mower read as
+        "returning" for six hours.
+        """
+        fake_api.go_offline()
+        await setup_integration.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get("lawn_mower.lawnmower").state == "unavailable"
+
+    async def test_stale_when_the_datapoints_stop_advancing(
+        self, hass: HomeAssistant, setup_integration, fake_api, freezer
+    ):
+        """Belt and braces: the cloud can keep claiming a dead mower is online.
+
+        ``is_online`` stays True here — only the data stops moving.
+        """
+        fake_api.timestamp = dt_util.utcnow().isoformat()
+        freezer.tick(timedelta(minutes=30))
+        await setup_integration.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get("lawn_mower.lawnmower").state == "unavailable"
+        assert hass.states.get("sensor.lawnmower_battery").attributes["stale"] is True
+
+    async def test_a_two_minute_gap_is_not_stale(
+        self, hass: HomeAssistant, setup_integration, fake_api, freezer
+    ):
+        """Measured over five days: 9629 samples, longest real gap 2.0 min."""
+        fake_api.timestamp = dt_util.utcnow().isoformat()
+        freezer.tick(timedelta(minutes=2))
+        await setup_integration.runtime_data.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get("lawn_mower.lawnmower").state == "docked"
+
+    async def test_recovers_when_the_mower_comes_back(
+        self, hass: HomeAssistant, setup_integration, fake_api
+    ):
+        coordinator = setup_integration.runtime_data
+        fake_api.go_offline()
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+        assert hass.states.get("lawn_mower.lawnmower").state == "unavailable"
+
+        fake_api.go_online()
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        assert hass.states.get("lawn_mower.lawnmower").state == "docked"
+        assert hass.states.get("sensor.lawnmower_battery").attributes["stale"] is False
+
+    async def test_settings_pass_is_skipped_while_the_mower_is_offline(
+        self, hass: HomeAssistant, setup_with_settings, fake_api
+    ):
+        """An offline mower cannot answer, so asking only spams the log.
+
+        The real one logged a warning every 15.5 minutes for six hours.
+        """
+        coordinator = setup_with_settings.runtime_data
+        fake_api.go_offline()
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        before = fake_api.mqtt_info_calls
+        await coordinator.async_refresh_settings_now()
+        await hass.async_block_till_done()
+
+        assert fake_api.mqtt_info_calls == before

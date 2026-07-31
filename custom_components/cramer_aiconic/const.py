@@ -99,6 +99,17 @@ MQTT_RESPONSE_TIMEOUT: Final = 25.0
 # Consecutive failed polls tolerated before entities report unavailable.
 FAILURES_BEFORE_UNAVAILABLE: Final = 3
 
+# How long the mower may go without reporting before its readings are treated
+# as stale rather than current.
+#
+# The cloud serves the last datapoints it received forever, so nothing else
+# distinguishes "docked and quiet" from "flat battery in the long grass". The
+# mower pushes datapoint 746 roughly every 30 s whether it is working or
+# charging: measured over five days and 9629 samples, the median gap was 30 s,
+# the 99th percentile 42 s and the longest gap 2.0 min. Ten minutes is five
+# times the worst real gap, so this cannot fire on a healthy mower.
+STALE_AFTER_SECONDS: Final = 600
+
 # Week-timer slots exposed as entities. The mower accepts 0-99, but a handful
 # is all a lawn needs and each slot costs four entities.
 SCHEDULE_SLOTS: Final = 4

@@ -189,6 +189,21 @@ SENSORS: tuple[CramerSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda m: m.last_status_push,
     ),
+    # Minutes rather than a timestamp because this exists to be compared
+    # against a threshold — "has it been quiet for more than N minutes" is a
+    # numeric_state trigger on this, and needs no template. Whole minutes
+    # keep it to one recorder row a minute instead of one per poll.
+    CramerSensorDescription(
+        key="last_contact_age",
+        translation_key="last_contact_age",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement=UnitOfTime.MINUTES,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda m: (
+            None if m.contact_age is None else int(m.contact_age.total_seconds() // 60)
+        ),
+    ),
 )
 
 
@@ -226,7 +241,8 @@ class CramerSensor(CramerEntity, SensorEntity):
         return self.entity_description.value_fn(self.mower)
 
     @property
-    def extra_state_attributes(self) -> dict[str, object] | None:
-        if self.entity_description.attrs_fn is None:
-            return None
-        return self.entity_description.attrs_fn(self.mower)
+    def extra_state_attributes(self) -> dict[str, object]:
+        attributes = super().extra_state_attributes
+        if self.entity_description.attrs_fn is not None:
+            attributes |= self.entity_description.attrs_fn(self.mower)
+        return attributes
