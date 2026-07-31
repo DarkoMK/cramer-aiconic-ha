@@ -76,11 +76,52 @@ are attributed to the active zone.
 `operation mode`,
 `cutting height` (the blade's current position), `default speed`, `schedule`,
 `signal quality`, `LTE signal`,
-`firmware`, `last status update`, and a `device_tracker` with the mower's GPS
-position.
+`firmware`, `last status update`, `last contact age`, and a `device_tracker`
+with the mower's GPS position.
 
 Binary sensors: `connectivity`, `charging`, `in charging station`, `problem`,
 `RTK fix`, `upside down`.
+
+### When the mower stops reporting
+
+The cloud serves the last datapoints it received from your mower forever, and
+never says how old they are. A mower that flattens its battery out on the lawn
+therefore looks exactly like one that is quietly docked — its battery, state
+and position all keep reading as though they were live.
+
+So the integration tracks the mower's own last sign of life, and treats the
+readings as stale once the cloud marks it offline **or** nothing has arrived
+for ten minutes. A healthy mower reports every ~30 s, docked or not; over five
+days of measurement the longest real gap was 2 minutes.
+
+| | Behaviour when stale |
+|---|---|
+| `lawn_mower` | `unavailable` — it can only claim what the mower is doing *now* |
+| every other entity | keeps its last reading, with a `stale: true` attribute |
+| `sensor` — last contact age | minutes since the mower last reported |
+| `binary_sensor` — connectivity | `off` |
+
+The MQTT settings pass is skipped while the mower is not reporting, rather
+than opening a session and waiting 25 s to fail.
+
+`sensor.<mower>_last_contact_age` is the one to alert on. It is derived from
+the cloud's own timestamp rather than from `last_changed`, so it survives a
+Home Assistant restart — an age built on `last_changed` silently restarts its
+count every time Home Assistant does:
+
+```yaml
+- alias: "Mower: lost contact"
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.lawnmower_last_contact_age
+      above: 15
+  actions:
+    - action: notify.mobile_app_phone
+      data:
+        message: >
+          The mower has not reported for
+          {{ states('sensor.lawnmower_last_contact_age') }} minutes.
+```
 
 ---
 

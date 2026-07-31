@@ -153,9 +153,23 @@ class CramerLawnMower(CramerEntity, LawnMowerEntity):
         return ACTIVITY_MAP.get(state, LawnMowerActivity.ERROR)
 
     @property
+    def available(self) -> bool:
+        """Unavailable once the mower stops reporting.
+
+        Every other entity keeps its last reading, flagged stale — a battery
+        percentage from ten minutes ago is still useful. This entity is
+        different: its whole job is to say what the mower is doing *now*, and
+        there is no honest way to answer that from stale data. Left available
+        it reported "returning" for the six hours after the real mower died on
+        the lawn, which read as a mower that was still on its way home.
+        """
+        return super().available and not self.mower.is_stale
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         mower = self.mower
-        return {
+        return super().extra_state_attributes | {
+            "last_contact": mower.last_contact,
             "raw_state": mower.main_state,
             "raw_state_code": mower.main_state_code,
             "sub_state": mower.sub_state,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -49,3 +51,18 @@ class CramerEntity(CoordinatorEntity[CramerCoordinator]):
         if self.coordinator.last_update_success:
             return True
         return self.coordinator.consecutive_failures <= FAILURES_BEFORE_UNAVAILABLE
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Say whether this reading is current or merely the last one seen.
+
+        The cloud keeps serving a silent mower's last datapoints indefinitely,
+        so a reading alone cannot be told apart from a live one. The values
+        are still worth showing — they are the best guess available — but they
+        have to carry the caveat with them.
+
+        Deliberately a flag and not the age: an age would change on every poll
+        and write a recorder row per entity per 30 s. ``sensor.*_last_contact_age``
+        carries the number, once.
+        """
+        return {"stale": self.mower.is_stale}

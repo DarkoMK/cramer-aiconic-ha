@@ -94,6 +94,9 @@
       "last_status_push": {
         "name": "Last status update"
       },
+      "last_contact_age": {
+        "name": "Last contact age"
+      },
       "default_speed": {
         "name": "Default speed"
       },
