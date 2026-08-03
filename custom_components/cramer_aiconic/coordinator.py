@@ -34,6 +34,7 @@ from .api import (
     CramerApiError,
     CramerAuthError,
     CramerDevice,
+    CramerEvictedError,
     CramerRateLimitError,
 )
 from .const import (
@@ -272,6 +273,12 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
 
             self._cycle += 1
             self.consecutive_failures = 0
+        except CramerEvictedError as err:
+            # The owner is using the phone app. Not a failure worth counting
+            # towards the unavailable threshold — the readings are simply
+            # frozen until the account comes back, and the app is the better
+            # place to look while it is in use.
+            raise UpdateFailed(str(err)) from err
         except CramerAuthError as err:
             raise ConfigEntryAuthFailed(str(err)) from err
         except CramerRateLimitError as err:
@@ -303,6 +310,11 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
             self.hass.loop.call_soon(self.async_update_listeners)
 
     def _settings_due(self) -> bool:
+        if self.api.is_yielded:
+            # The settings pass is the one thing here that takes the AWS IoT
+            # client-id slot as well as an access token, so it is doubly rude
+            # to run it while the owner is in the app.
+            return False
         return time.monotonic() - self._settings_last_run >= SETTINGS_REFRESH_SECONDS
 
     async def _async_update_device(self, device: CramerDevice) -> None:
@@ -458,6 +470,13 @@ class CramerCoordinator(DataUpdateCoordinator[dict[str, MowerState]]):
         if self._settings_lock.locked():
             return
         async with self._settings_lock:
+            if self.api.is_yielded:
+                # Checked again here because a forced pass after a settings
+                # write skips _settings_due entirely.
+                _LOGGER.debug(
+                    "Skipping the settings pass: the phone app has the account"
+                )
+                return
             self._settings_last_run = time.monotonic()
             _LOGGER.debug("Starting MQTT settings pass for %d device(s)", len(self._devices))
             for device in self._devices:

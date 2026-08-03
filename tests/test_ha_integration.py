@@ -24,6 +24,7 @@ from custom_components.cramer_aiconic import protocol
 from custom_components.cramer_aiconic.api import (
     CramerApiError,
     CramerDevice,
+    CramerEvictedError,
     CramerRateLimitError,
 )
 from custom_components.cramer_aiconic.const import (
@@ -88,6 +89,9 @@ class FakeApi:
         self.devices = [DEVICE]
         self.on_tokens_updated = None
         self.mqtt_info_calls = 0
+        #: Whether the client has stood down because the phone app took the
+        #: account session.
+        self.is_yielded = False
         #: Timestamp the cloud stamps on its cached datapoints. None means
         #: "the mower reported just now", which is what a healthy mower does
         #: every ~30 s. Tests pin an older value to simulate one that has
@@ -768,3 +772,79 @@ class TestOfflineAndStaleness:
         await hass.async_block_till_done()
 
         assert fake_api.mqtt_info_calls == before
+
+
+class TestYieldingToThePhoneApp:
+    """Standing down when the owner takes the account back.
+
+    The account holds one token version, so Home Assistant and the phone app
+    evict each other. Home Assistant is the one that should give way: it can
+    afford to show stale readings for a few minutes, and the owner cannot use
+    an app that logs them out every thirty seconds.
+    """
+
+    async def test_an_eviction_does_not_raise_the_reauth_dialog(
+        self, hass: HomeAssistant, setup_integration, fake_api
+    ):
+        """The password is correct — asking for it again would be wrong."""
+        coordinator = setup_integration.runtime_data
+
+        async def evicted(*args, **kwargs):
+            raise CramerEvictedError("the phone app has the account session")
+
+        fake_api.async_get_datapoints = evicted
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        assert coordinator.last_update_success is False
+        assert setup_integration.state is ConfigEntryState.LOADED
+        assert not list(hass.config_entries.flow.async_progress())
+
+    async def test_an_eviction_is_not_counted_as_a_failure(
+        self, hass: HomeAssistant, setup_integration, fake_api
+    ):
+        """Being evicted is the phone app working, not the cloud breaking."""
+        coordinator = setup_integration.runtime_data
+
+        async def evicted(*args, **kwargs):
+            raise CramerEvictedError("the phone app has the account session")
+
+        fake_api.async_get_datapoints = evicted
+        for _ in range(3):
+            await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        assert coordinator.consecutive_failures == 0
+
+    async def test_settings_pass_is_skipped_while_the_app_holds_the_account(
+        self, hass: HomeAssistant, setup_with_settings, fake_api
+    ):
+        """The settings pass also takes the AWS IoT slot, so it must not run.
+
+        Doubly rude while the owner is in the app: it bumps the token version
+        *and* kicks the phone off its MQTT connection mid-zone-mapping.
+        """
+        coordinator = setup_with_settings.runtime_data
+        fake_api.is_yielded = True
+
+        before = fake_api.mqtt_info_calls
+        await coordinator.async_refresh_settings_now()
+        await hass.async_block_till_done()
+
+        assert fake_api.mqtt_info_calls == before
+
+    async def test_settings_pass_resumes_once_the_account_comes_back(
+        self, hass: HomeAssistant, setup_with_settings, fake_api
+    ):
+        """Standing down has to be temporary, or the settings freeze forever."""
+        coordinator = setup_with_settings.runtime_data
+        fake_api.is_yielded = True
+        await coordinator.async_refresh_settings_now()
+        await hass.async_block_till_done()
+
+        fake_api.is_yielded = False
+        before = fake_api.mqtt_info_calls
+        await coordinator.async_refresh_settings_now()
+        await hass.async_block_till_done()
+
+        assert fake_api.mqtt_info_calls > before

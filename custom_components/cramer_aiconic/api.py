@@ -21,6 +21,16 @@ So this client:
 * falls back to a full username/password login whenever a refresh fails, so a
   lost or revoked refresh token self-heals instead of requiring the user to
   reconfigure the integration.
+
+One more constraint shapes the request layer. The account carries a single
+**token version**, and every acquisition bumps it: after a second client logs
+in, the first client's access token returns
+``401 {"code": 88889, "msg": "Invalid token version"}``. Refreshing does this
+too, not just logging in, so the two can never hold a session at the same
+time. Because ``async_ensure_token`` renews proactively, any 401 on a request
+means the owner picked up their phone — not that the token aged out. Renewing
+there would take the account straight back off them, which is what made the
+app unusable. So the client stands down instead; see ``_begin_yield``.
 """
 
 from __future__ import annotations
@@ -48,6 +58,7 @@ from .const import (
     FALLBACK_GUC_BASE,
     NO_AUTH_BASE,
     REGION_LIST_PATH,
+    SESSION_YIELD_SECONDS,
     TARGET,
     TENANT,
     TOKEN_EXPIRY_MARGIN,
@@ -72,6 +83,15 @@ class CramerAuthError(CramerApiError):
 
 class CramerRateLimitError(CramerApiError):
     """The cloud is temporarily refusing requests."""
+
+
+class CramerEvictedError(CramerApiError):
+    """Another client holds the account session, so this one has stood down.
+
+    Deliberately *not* a :class:`CramerAuthError`: the credentials are fine and
+    raising the reauth flow would ask the owner to re-enter a correct password
+    every time they opened the phone app.
+    """
 
 
 @dataclass
@@ -127,6 +147,9 @@ class CramerAiConicApi:
         self._refresh_token: str | None = refresh_token
         self._expires_at: float = 0.0
         self._user_id: str | None = None
+        #: Monotonic deadline before which this client must not touch the
+        #: account, because another one has taken it.
+        self._yield_until: float = 0.0
 
         self._token_lock = asyncio.Lock()
 
@@ -134,6 +157,16 @@ class CramerAiConicApi:
     @property
     def region_code(self) -> str:
         return self._region_code
+
+    @property
+    def is_yielded(self) -> bool:
+        """Whether the account is currently being left to another client."""
+        return time.monotonic() < self._yield_until
+
+    @property
+    def yield_remaining(self) -> float:
+        """Seconds left before the session is reclaimed."""
+        return max(0.0, self._yield_until - time.monotonic())
 
     @property
     def refresh_token(self) -> str | None:
@@ -187,11 +220,18 @@ class CramerAiConicApi:
                     method, url, headers=headers, json=json_body, timeout=REQUEST_TIMEOUT
                 ) as resp:
                     if resp.status == 401:
-                        # Token rejected despite looking valid — force a new one.
-                        _LOGGER.debug("401 from %s, forcing re-authentication", path)
-                        await self.async_ensure_token(force=True)
-                        last_error = CramerAuthError(f"401 from {path}")
-                        continue
+                        # ``async_ensure_token`` above renewed the token if it
+                        # was anywhere near expiry, so the server had no reason
+                        # to reject it on age. The only other thing that
+                        # invalidates it is somebody else acquiring a token on
+                        # this account — the phone app. Taking it back here is
+                        # what logged the owner out within one poll of opening
+                        # the app, so stand down instead.
+                        self._begin_yield(path)
+                        raise CramerEvictedError(
+                            "The phone app has taken the account session; "
+                            f"standing down for {SESSION_YIELD_SECONDS // 60} minutes"
+                        )
                     resp.raise_for_status()
                     payload = await resp.json(content_type=None)
             except ClientResponseError as err:
@@ -325,8 +365,34 @@ class CramerAiConicApi:
         self._apply_token_response(payload)
         await self._persist_tokens()
 
+    def _begin_yield(self, path: str) -> None:
+        """Leave the account to whoever took it, and drop the dead token.
+
+        The evicted access token will 401 for the rest of its nominal life, so
+        it is cleared here; reclaiming the session after the window has to
+        start from a fresh acquisition.
+        """
+        self._access_token = None
+        self._expires_at = 0.0
+        self._yield_until = time.monotonic() + SESSION_YIELD_SECONDS
+        _LOGGER.info(
+            "Evicted from the Cramer account by another client (401 on %s) — "
+            "leaving it to the phone app for %d minutes",
+            path,
+            SESSION_YIELD_SECONDS // 60,
+        )
+
     async def async_ensure_token(self, *, force: bool = False) -> str:
         """Return a valid access token, acquiring or renewing one if needed."""
+        if self.is_yielded:
+            # Acquiring here would bump the token version and kick the phone
+            # app straight back out, which is the whole thing being avoided.
+            raise CramerEvictedError(
+                "Standing down for another "
+                f"{self.yield_remaining / 60:.0f} minutes; the phone app has "
+                "the account session"
+            )
+
         if (
             not force
             and self._access_token

@@ -33,6 +33,12 @@ async def async_get_config_entry_diagnostics(
     return {
         "entry": async_redact_data(dict(entry.data), TO_REDACT),
         "options": dict(entry.options),
+        # Stale readings with no polling errors usually mean the account is
+        # being left to the phone app, which is otherwise invisible.
+        "session": {
+            "yielded_to_phone_app": coordinator.api.is_yielded,
+            "yield_remaining_seconds": round(coordinator.api.yield_remaining),
+        },
         "mowers": {
             # ``is_stale`` and the contact age are properties, so ``asdict``
             # does not see them — and they are the first thing worth knowing

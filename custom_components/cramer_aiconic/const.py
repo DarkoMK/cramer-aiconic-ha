@@ -66,6 +66,18 @@ TOKEN_SCOPES: Final = " ".join(
 # full password login.
 TOKEN_EXPIRY_MARGIN: Final = 600
 
+# How long to leave the account alone after being evicted from it.
+#
+# The Globe account carries a single token version. Any acquisition — password
+# login *or* refresh — bumps it and kills every token issued before, which
+# returns 401 code 88889. Two clients therefore cannot share an account, and
+# the loser notices within one poll. Home Assistant polls every 30 s, so
+# renewing on eviction logged the owner out of the phone app almost the moment
+# they opened it. Standing down for fifteen minutes hands the account back for
+# long enough to actually use the app; the mower's own cloud link is separate
+# and is not affected either way.
+SESSION_YIELD_SECONDS: Final = 900
+
 USER_AGENT: Final = "okhttp/4.12.0"
 
 # --- Polling ---------------------------------------------------------------

@@ -50,13 +50,15 @@ class CramerSettingsSyncSwitch(CramerEntity, SwitchEntity):
 
     The AWS IoT policy pins the MQTT client id to the account's Cognito
     identity, so Home Assistant and the phone app cannot both hold a
-    connection — whoever connects last kicks the other off. Everything else
-    this integration does (state polling, and every command including start,
-    dock, park and cutting height) goes over stateless REST and never touches
-    that slot; only the settings pass does, for a few seconds every fifteen
-    minutes. That is still enough to interrupt mapping a zone in the app, so
-    turn this off for the duration and the phone keeps the link while Home
-    Assistant keeps both state and control.
+    connection — whoever connects last kicks the other off. Only the settings
+    pass takes that slot, for a few seconds every fifteen minutes, which is
+    still enough to interrupt mapping a zone in the app; turn this off for the
+    duration and the phone keeps the link.
+
+    It does *not* make Home Assistant invisible to the app. The account also
+    holds a single token version, so the REST side evicts the app too — see
+    ``api.CramerAiConicApi._begin_yield``, which handles that automatically by
+    standing down for fifteen minutes whenever the app takes the account.
 
     Runtime-only by design. ``settings_enabled`` is re-read on every poll, so
     this takes effect immediately without reloading the entry — and a restart

@@ -121,13 +121,14 @@ async def test_other_error_codes_are_not_retried(make_client, api_module):
 
 
 @pytest.mark.asyncio
-async def test_401_triggers_reauth_and_retry(make_client, api_module):
-    api, session = make_client(
-        [
-            FakeResponse(401, {}),
-            FakeResponse(200, {"code": 0, "info": {"is_online": True}}),
-        ]
-    )
+async def test_401_stands_down_rather_than_reauthenticating(make_client, api_module):
+    """A 401 means the phone app took the account, not that the token aged out.
+
+    This used to re-authenticate and retry. That bumped the account's single
+    token version, so the owner was logged out of the app within one 30 s poll
+    of opening it. See ``test_session_yield.py`` for the full behaviour.
+    """
+    api, session = make_client([FakeResponse(401, {})])
     reauths = []
 
     async def fake_ensure(force=False):
@@ -136,9 +137,11 @@ async def test_401_triggers_reauth_and_retry(make_client, api_module):
 
     api.async_ensure_token = fake_ensure
 
-    assert await api.async_send_command("prod", "dev", "deadbeef") is True
-    assert True in reauths
-    assert len(session.calls) == 2
+    with pytest.raises(api_module.CramerEvictedError):
+        await api.async_send_command("prod", "dev", "deadbeef")
+
+    assert reauths == [False], "re-authenticating here is what kicked the app out"
+    assert len(session.calls) == 1
 
 
 @pytest.mark.asyncio
